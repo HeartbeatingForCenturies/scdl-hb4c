@@ -470,7 +470,7 @@ def truncate_str(s: str, length: int) -> str:
 def sanitize_str(
     filename: str,
     ext: str = "",
-    replacement_char: str = "�",
+    replacement_char: str = "",
     max_length: int = 255,
 ) -> str:
     """Sanitizes a string for use as a filename. Does not allow the file to be hidden"""
@@ -1291,9 +1291,23 @@ def _add_metadata_to_stream(
 
     if kwargs.get("original_art"):
         artwork_response = _try_get_artwork(artwork_base_url, "original")
+        new_artwork_url = artwork_base_url.replace("large", "original")
+        if artwork_response is None:
+            artwork_response = _try_get_artwork(artwork_base_url, "original.png")
+            new_artwork_url = artwork_base_url.replace("large", "original.png")
+        if artwork_response is None:
+            artwork_response = _try_get_artwork(artwork_base_url, "t3000x3000")
+            new_artwork_url = artwork_base_url.replace("large", "t3000x3000")
+        if artwork_response is None:
+            new_artwork_url = "None"
+            logger.error(f"Could not get cover art at {artwork_base_url}")
 
     if artwork_response is None:
         artwork_response = _try_get_artwork(artwork_base_url, "t500x500")
+        new_artwork_url = artwork_base_url.replace("large", "t500x500")
+        if artwork_response is None:
+            new_artwork_url = "None"
+            logger.error(f"Could not get cover art at {artwork_base_url}")
 
     artist: str = track.user.username
     if bool(kwargs.get("extract_artist")):
@@ -1313,9 +1327,11 @@ def _add_metadata_to_stream(
         title=track.title,
         description=track.description,
         genre=track.genre,
+        tags=track.tag_list,
+        artwork_url=new_artwork_url,
         artwork_jpeg=artwork_response.content if artwork_response else None,
         link=track.permalink_url,
-        date=track.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+        date=track.created_at.strftime("%Y-%m-%dT%H:%M:%S"),
         album_title=playlist_info["title"] if album_available else None,  # type: ignore[index]
         album_author=playlist_info["author"] if album_available else None,  # type: ignore[index]
         album_track_num=playlist_info["tracknumber_int"] if album_available else None,  # type: ignore[index]
