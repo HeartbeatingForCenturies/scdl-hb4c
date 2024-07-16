@@ -1175,7 +1175,7 @@ def record_download_archive(track: Union[BasicTrack, Track], kwargs: SCDLArgs) -
 
 
 def _try_get_artwork(url: str, size: str = "original") -> Optional[requests.Response]:
-    new_artwork_url = url.replace("large", size)
+    new_artwork_url = url.replace("large.jpg", size)
 
     try:
         artwork_response = requests.get(new_artwork_url, allow_redirects=False, timeout=5)
@@ -1291,13 +1291,13 @@ def _add_metadata_to_stream(
 
     if kwargs.get("original_art"):
         artwork_response = _try_get_artwork(artwork_base_url, "original")
-        new_artwork_url = artwork_base_url.replace("large", "original")
+        new_artwork_url = artwork_base_url.replace("large.jpg", "original.jpg")
         if artwork_response is None:
             artwork_response = _try_get_artwork(artwork_base_url, "original.png")
-            new_artwork_url = artwork_base_url.replace("large", "original.png")
+            new_artwork_url = artwork_base_url.replace("large.jpg", "original.png")
         if artwork_response is None:
-            artwork_response = _try_get_artwork(artwork_base_url, "t3000x3000")
-            new_artwork_url = artwork_base_url.replace("large", "t3000x3000")
+            artwork_response = _try_get_artwork(artwork_base_url, "t3000x3000.jpg")
+            new_artwork_url = artwork_base_url.replace("large.jpg", "t3000x3000.jpg")
         if artwork_response is None:
             new_artwork_url = "None"
             logger.error(f"Could not get cover art at {artwork_base_url}")
