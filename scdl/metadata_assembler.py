@@ -2,7 +2,6 @@ from base64 import b64encode
 from dataclasses import dataclass
 from functools import singledispatch
 from typing import Optional, Union
-import scdl
 from mutagen.id3 import TXXX
 
 from mutagen import (
