@@ -2,6 +2,7 @@ from base64 import b64encode
 from dataclasses import dataclass
 from functools import singledispatch
 from typing import Optional, Union
+import scdl
 from mutagen.id3 import TXXX
 
 from mutagen import (
@@ -30,6 +31,7 @@ class MetadataInfo:
     artwork_jpeg: Optional[bytes]
     link: Optional[str]
     date: Optional[str]
+    display_date: Optional[str]
     album_title: Optional[str]
     album_author: Optional[str]
     album_track_num: Optional[int]
@@ -79,6 +81,9 @@ def _assemble_vorbis_tags(file: FileType, meta: MetadataInfo) -> None:
         file["Description"] = meta.description
     if meta.artwork_url:
         file["Artwork"] = meta.artwork_url
+    if meta.display_date:
+        file["ReleaseTime"] = meta.display_date
+    
 
 
 @assemble_metadata.register(flac.FLAC)
@@ -124,6 +129,8 @@ def _(file: Union[wave.WAVE, mp3.MP3], meta: MetadataInfo) -> None:
         file["APIC"] = _get_apic(meta.artwork_jpeg, meta)
     if meta.artwork_url:
         file["TXXX:Artwork"] = TXXX(encoding=3, desc=u'Artwork', text=str(meta.artwork_url))
+    if meta.display_date:
+        file["TXXX:ReleaseTime"] = TXXX(encoding=3, desc=u'ReleaseTime', text=str(meta.display_date))
         
 
 @assemble_metadata.register(mp4.MP4)
@@ -148,3 +155,5 @@ def _(file: mp4.MP4, meta: MetadataInfo) -> None:
         file["covr"] = [mp4.MP4Cover(meta.artwork_jpeg)]
     if meta.artwork_url:
         file["----:com.apple.iTunes:Artwork"] = meta.artwork_url.encode()
+    if meta.display_date:
+        file["----:com.apple.iTunes:ReleaseTime"] = meta.display_date.encode() if meta.display_date else None
