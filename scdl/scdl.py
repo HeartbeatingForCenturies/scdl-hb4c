@@ -95,6 +95,7 @@ from dataclasses import asdict
 from functools import lru_cache
 from types import TracebackType
 from typing import IO, Generator, List, NoReturn, Optional, Set, Tuple, Type, Union
+from datetime import datetime
 
 from tqdm import tqdm
 
@@ -1290,7 +1291,7 @@ def _add_metadata_to_stream(
     artwork_response = None
 
     if kwargs.get("original_art"):
-        artwork_response = _try_get_artwork(artwork_base_url, "original")
+        artwork_response = _try_get_artwork(artwork_base_url, "original.jpg")
         new_artwork_url = artwork_base_url.replace("large.jpg", "original.jpg")
         if artwork_response is None:
             artwork_response = _try_get_artwork(artwork_base_url, "original.png")
@@ -1303,8 +1304,8 @@ def _add_metadata_to_stream(
             logger.error(f"Could not get cover art at {artwork_base_url}")
 
     if artwork_response is None:
-        artwork_response = _try_get_artwork(artwork_base_url, "t500x500")
-        new_artwork_url = artwork_base_url.replace("large", "t500x500")
+        artwork_response = _try_get_artwork(artwork_base_url, "t500x500.jpg")
+        new_artwork_url = artwork_base_url.replace("large", "t500x500.jpg")
         if artwork_response is None:
             new_artwork_url = "None"
             logger.error(f"Could not get cover art at {artwork_base_url}")
@@ -1322,6 +1323,10 @@ def _add_metadata_to_stream(
 
     album_available: bool = (playlist_info is not None) and not kwargs.get("no_album_tag")
 
+    display_date_str = track.display_date
+    display_date_obj = datetime.strptime(display_date_str, '%Y-%m-%dT%H:%M:%SZ')
+    display_date = display_date_obj.strftime('%Y-%m-%dT%H:%M:%S')
+
     metadata = MetadataInfo(
         artist=artist,
         title=track.title,
@@ -1332,6 +1337,7 @@ def _add_metadata_to_stream(
         artwork_jpeg=artwork_response.content if artwork_response else None,
         link=track.permalink_url,
         date=track.created_at.strftime("%Y-%m-%dT%H:%M:%S"),
+        display_date=display_date,
         album_title=playlist_info["title"] if album_available else None,  # type: ignore[index]
         album_author=playlist_info["author"] if album_available else None,  # type: ignore[index]
         album_track_num=playlist_info["tracknumber_int"] if album_available else None,  # type: ignore[index]
