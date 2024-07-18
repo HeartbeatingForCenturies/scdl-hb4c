@@ -112,12 +112,12 @@ def _(file: Union[wave.WAVE, mp3.MP3], meta: MetadataInfo) -> None:
     file["TPE1"] = id3.TPE1(encoding=3, text=meta.artist)
     file["TDRC"] = id3.TDRC(encoding=3, text=meta.date)
     file["WOAR"] = id3.WOAR(url=meta.link)
+    if meta.display_date:
+        file["TDRL"] = id3.TDRL(encoding=3, text=meta.display_date)
     if meta.description:
         file["COMM"] = id3.COMM(encoding=3, lang="ENG", text=meta.description)
     if meta.genre:
         file["TCON"] = id3.TCON(encoding=3, text=meta.genre)
-    if meta.tags:
-        file["TXXX:Tags"] = TXXX(encoding=3, desc=u'Tags', text=str(meta.tags))
     if meta.album_title:
         file["TALB"] = id3.TALB(encoding=3, text=meta.album_title)
     if meta.album_author:
@@ -128,9 +128,8 @@ def _(file: Union[wave.WAVE, mp3.MP3], meta: MetadataInfo) -> None:
         file["APIC"] = _get_apic(meta.artwork_jpeg, meta)
     if meta.artwork_url:
         file["TXXX:Artwork"] = TXXX(encoding=3, desc=u'Artwork', text=str(meta.artwork_url))
-    if meta.display_date:
-        file["TXXX:ReleaseTime"] = TXXX(encoding=3, desc=u'ReleaseTime', text=str(meta.display_date))
-        
+    if meta.tags:
+        file["TXXX:Tags"] = TXXX(encoding=3, desc=u'Tags', text=str(meta.tags))
 
 @assemble_metadata.register(mp4.MP4)
 def _(file: mp4.MP4, meta: MetadataInfo) -> None:
