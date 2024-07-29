@@ -96,7 +96,6 @@ from functools import lru_cache
 from types import TracebackType
 from typing import IO, Generator, List, NoReturn, Optional, Set, Tuple, Type, Union
 from datetime import datetime
-
 from tqdm import tqdm
 
 if sys.version_info < (3, 8):
@@ -117,6 +116,7 @@ from pathvalidate import sanitize_filename
 from soundcloud import (
     AlbumPlaylist,
     BasicAlbumPlaylist,
+    AlbumPlaylistNoTracks,
     BasicTrack,
     MiniTrack,
     PlaylistLike,
@@ -133,6 +133,7 @@ from soundcloud import (
 
 from scdl import __version__, utils
 from scdl.metadata_assembler import MetadataInfo, assemble_metadata
+import re
 
 mimetypes.init()
 
@@ -198,6 +199,12 @@ class PlaylistInfo(TypedDict):
     title: str
     tracknumber_int: int
     tracknumber: str
+    track_count: int
+    published_at: datetime
+    display_date: str
+    created_at: datetime
+    release_date: datetime
+    set_type: str
 
 
 class SoundCloudException(Exception):  # noqa: N818
@@ -684,7 +691,7 @@ def sync(
 
 def download_playlist(
     client: SoundCloud,
-    playlist: Union[AlbumPlaylist, BasicAlbumPlaylist],
+    playlist: Union[AlbumPlaylist, BasicAlbumPlaylist, AlbumPlaylistNoTracks],
     kwargs: SCDLArgs,
 ) -> None:
     """Downloads a playlist"""
@@ -695,8 +702,15 @@ def download_playlist(
     playlist_name = sanitize_str(playlist_name)
     playlist_info: PlaylistInfo = {
         "author": playlist.user.username,
+        "set_type": playlist.set_type,
         "id": playlist.id,
         "title": playlist.title,
+        "track_count": playlist.track_count,
+        "display_date": playlist.display_date,
+        "published_at": playlist.published_at,
+        "created_at": playlist.created_at,
+        "release_date": playlist.release_date,
+        "permalink_url": playlist.permalink_url,
         "tracknumber_int": 0,
         "tracknumber": "0",
     }
@@ -729,6 +743,7 @@ def download_playlist(
         ):
             logger.debug(track)
             logger.info(f"Track n°{counter}")
+            #count = playlist_info["track_count"]
             playlist_info["tracknumber_int"] = counter
             playlist_info["tracknumber"] = str(counter).zfill(tracknumber_digits)
             if isinstance(track, MiniTrack):
@@ -1086,6 +1101,7 @@ def download_track(
         if is_already_downloaded and kwargs.get("force_metadata"):
             with open(filename, "rb") as f:
                 file_data = io.BytesIO(f.read())
+                
 
             _add_metadata_to_stream(track, file_data, kwargs, playlist_info)
 
@@ -1095,8 +1111,15 @@ def download_track(
 
         # Try to change the real creation date
         if not to_stdout:
-            filetime = int(time.mktime(track.created_at.timetuple()))
-            try_utime(filename, filetime)
+           # Get the current time
+            current_time = time.time()
+            # Update the file modification time to the current time
+            os.utime(filename, (current_time, current_time))
+
+        #Try to change the real creation date
+        #if not to_stdout:
+           # filetime = int(time.mktime(track.created_at.timetuple()))
+            #try_utime(filename, filetime)
 
         logger.info(f"{filename} Downloaded.\n")
     except SoundCloudException as err:
@@ -1173,25 +1196,6 @@ def record_download_archive(track: Union[BasicTrack, Track], kwargs: SCDLArgs) -
     except OSError as ioe:
         logger.error("Error trying to write to download archive...")
         logger.error(ioe)
-
-
-def _try_get_artwork(url: str, size: str = "original") -> Optional[requests.Response]:
-    new_artwork_url = url.replace("large.jpg", size)
-
-    try:
-        artwork_response = requests.get(new_artwork_url, allow_redirects=False, timeout=5)
-
-        if artwork_response.status_code != 200:
-            return None
-
-        content_type = artwork_response.headers.get("Content-Type", "").lower()
-        if content_type not in ("image/png", "image/jpeg", "image/jpg"):
-            return None
-
-        return artwork_response
-    except requests.RequestException:
-        return None
-
 
 def build_ffmpeg_encoding_args(
     input_file: str,
@@ -1279,6 +1283,29 @@ def _write_streaming_response_to_pipe(
         pipe.close()
 
 
+def _try_get_artwork(url: str, size: str = "original") -> Optional[requests.Response]:
+    if "large.jpg" in url:
+        new_artwork_url = url.replace("large.jpg", size)
+    elif "large.png" in url:
+        new_artwork_url = url.replace("large.png", size)
+    else:
+        new_artwork_url = url.replace("large", size)
+
+    try:
+        artwork_response = requests.get(new_artwork_url, allow_redirects=False, timeout=5)
+
+        if artwork_response.status_code != 200:
+            return None
+
+        content_type = artwork_response.headers.get("Content-Type", "").lower()
+        if content_type not in ("image/png", "image/jpeg", "image/jpg"):
+            return None
+
+        return artwork_response
+    except requests.RequestException:
+        return None
+        
+
 def _add_metadata_to_stream(
     track: Union[BasicTrack, Track],
     stream: io.BytesIO,
@@ -1289,26 +1316,42 @@ def _add_metadata_to_stream(
 
     artwork_base_url = track.artwork_url or track.user.avatar_url
     artwork_response = None
+    new_artwork_url = "None"  # Ensure new_artwork_url is initialized
 
     if kwargs.get("original_art"):
-        artwork_response = _try_get_artwork(artwork_base_url, "original.jpg")
-        new_artwork_url = artwork_base_url.replace("large.jpg", "original.jpg")
+        # Try different sizes and formats
+        for size in ["original.jpg", "original.png", "t3000x3000.jpg", "t3000x3000.png"]:
+            artwork_response = _try_get_artwork(artwork_base_url, size)
+            if artwork_response is not None:
+                new_artwork_url = artwork_base_url.replace("large.jpg", size).replace("large.png", size)
+                break
+
         if artwork_response is None:
-            artwork_response = _try_get_artwork(artwork_base_url, "original.png")
-            new_artwork_url = artwork_base_url.replace("large.jpg", "original.png")
-        if artwork_response is None:
-            artwork_response = _try_get_artwork(artwork_base_url, "t3000x3000.jpg")
-            new_artwork_url = artwork_base_url.replace("large.jpg", "t3000x3000.jpg")
-        if artwork_response is None:
-            new_artwork_url = "None"
             logger.error(f"Could not get cover art at {artwork_base_url}")
 
     if artwork_response is None:
-        artwork_response = _try_get_artwork(artwork_base_url, "t500x500.jpg")
-        new_artwork_url = artwork_base_url.replace("large", "t500x500.jpg")
+        # Fallback size
+        for size in ["t500x500.jpg", "t500x500.png"]:
+            artwork_response = _try_get_artwork(artwork_base_url, size)
+            if artwork_response is not None:
+                new_artwork_url = artwork_base_url.replace("large.jpg", size).replace("large.png", size)
+                break
+
         if artwork_response is None:
             new_artwork_url = "None"
             logger.error(f"Could not get cover art at {artwork_base_url}")
+
+    def capitalize_set_type(set_type):
+        if set_type == "ep":
+            return "EP"
+        else:
+            return set_type.capitalize()
+
+    album_type = None
+
+    # Use new_artwork_url and album_type here
+    logger.info(f"Artwork URL: {new_artwork_url}")
+    logger.info(f"Set Type: {album_type}")
 
     artist: str = track.user.username
     if bool(kwargs.get("extract_artist")):
@@ -1323,10 +1366,35 @@ def _add_metadata_to_stream(
 
     album_available: bool = (playlist_info is not None) and not kwargs.get("no_album_tag")
 
-    display_date_str = track.display_date
-    display_date_obj = datetime.strptime(display_date_str, '%Y-%m-%dT%H:%M:%SZ')
+    display_date_obj = track.display_date
     display_date = display_date_obj.strftime('%Y-%m-%dT%H:%M:%S')
-
+   
+    created_date_obj = track.created_at
+    created_date = created_date_obj.strftime('%Y-%m-%dT%H:%M:%S')
+    
+    if album_available and playlist_info:
+        album_type = capitalize_set_type(playlist_info.get("set_type", ""))
+        album_link = playlist_info.get("permalink_url")
+        
+        album_display_date = playlist_info.get("display_date")
+        album_publish_date = playlist_info.get("published_at")
+        album_created_date = playlist_info.get("created_at")
+        album_release_date = playlist_info.get("release_date")
+        
+        # Convert to string and remove 'Z'
+        album_display_date_str = album_display_date.strftime('%Y-%m-%dT%H:%M:%S') if isinstance(album_display_date, datetime) else album_display_date
+        album_publish_date_str = album_publish_date.strftime('%Y-%m-%dT%H:%M:%S') if isinstance(album_publish_date, datetime) else album_publish_date
+        album_created_date_str = album_created_date.strftime('%Y-%m-%dT%H:%M:%S') if isinstance(album_created_date, datetime) else album_created_date
+        album_release_date_str = album_release_date.strftime('%Y-%m-%dT%H:%M:%S') if isinstance(album_release_date, datetime) else album_release_date
+    
+    waveform = track.waveform_url
+    pattern = r"https://wave\.sndcdn\.com/([a-zA-Z0-9_\-\.]+)_m\.json"
+    match = re.search(pattern, waveform)
+    if match:
+        uid = match.group(1)
+    else:
+        uid = None
+    
     metadata = MetadataInfo(
         artist=artist,
         title=track.title,
@@ -1336,14 +1404,25 @@ def _add_metadata_to_stream(
         artwork_url=new_artwork_url,
         artwork_jpeg=artwork_response.content if artwork_response else None,
         link=track.permalink_url,
-        date=track.created_at.strftime("%Y-%m-%dT%H:%M:%S"),
+        created_date=created_date,
         display_date=display_date,
         album_title=playlist_info["title"] if album_available else None,  # type: ignore[index]
         album_author=playlist_info["author"] if album_available else None,  # type: ignore[index]
         album_track_num=playlist_info["tracknumber_int"] if album_available else None,  # type: ignore[index]
+        album_track_count=playlist_info["track_count"] if album_available else None,  # type: ignore[index]
+        album_type=album_type if album_available else None,  # Use processed album_type
+        album_display_date=album_display_date_str if album_available else None,
+        album_publish_date=album_publish_date_str if album_available else None,
+        album_created_date=album_created_date_str if album_available else None,
+        album_release_date=album_release_date_str if album_available else None,
+        album_link=album_link if album_available else None,
+        uid=uid,
+        track_id=track.id,
+        user_id=track.user_id,
     )
 
     mutagen_file = mutagen.File(stream)
+
 
     try:
         # Delete all the existing tags and write our own tags

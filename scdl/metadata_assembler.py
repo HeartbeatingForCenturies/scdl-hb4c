@@ -29,16 +29,26 @@ class MetadataInfo:
     artwork_url: Optional[str]
     artwork_jpeg: Optional[bytes]
     link: Optional[str]
-    date: Optional[str]
+    created_date: Optional[str]
     display_date: Optional[str]
     album_title: Optional[str]
     album_author: Optional[str]
     album_track_num: Optional[int]
     tags: Optional[str]
+    uid: Optional[str]
+    track_id: Optional[int]
+    user_id: Optional[int]
+    album_track_count: Optional[int]
+    album_type: Optional[str]
+    album_publish_date: Optional[str]
+    album_display_date: Optional[str]
+    album_created_date: Optional[str]
+    album_release_date: Optional[str]
+    album_link: Optional[str]
 
 
 @singledispatch
-def assemble_metadata(file: FileType, meta: MetadataInfo) -> None:  # noqa: ARG001
+def assemble_metadata(file: FileType, meta: MetadataInfo) -> None:
     raise NotImplementedError
 
 
@@ -64,7 +74,7 @@ def _get_apic(jpeg_data: bytes, meta: MetadataInfo) -> id3.APIC:
 def _assemble_vorbis_tags(file: FileType, meta: MetadataInfo) -> None:
     file["Artist"] = meta.artist
     file["Title"] = meta.title
-    file["Date"] = meta.date
+    file["Date"] = meta.created_date
     file["WWWArtist"] = meta.link
     if meta.genre:
         file["Genre"] = meta.genre
@@ -82,9 +92,24 @@ def _assemble_vorbis_tags(file: FileType, meta: MetadataInfo) -> None:
         file["Artwork"] = meta.artwork_url
     if meta.display_date:
         file["ReleaseTime"] = meta.display_date
-    
-
-
+    if meta.uid:
+        file["UID"] = meta.uid
+    if meta.track_id:
+        file["ID"] = str(meta.track_id)
+    if meta.user_id:
+        file["ID User"] = str(meta.user_id)
+    if meta.album_type:
+        file["ReleaseType"] = meta.album_type
+    if meta.album_display_date is not None:
+        file["Album Display Date"] = meta.album_display_date
+    if meta.album_publish_date is not None:
+        file["Album Publish Date"] = meta.album_publish_date
+    if meta.album_created_date:
+        file["Album Creation Date"] = meta.album_created_date
+    if meta.album_release_date:
+        file["Album Release Date"] = meta.album_release_date
+        
+        
 @assemble_metadata.register(flac.FLAC)
 def _(file: flac.FLAC, meta: MetadataInfo) -> None:
     _assemble_vorbis_tags(file, meta)
@@ -110,8 +135,8 @@ def _(file: oggopus.OggOpus, meta: MetadataInfo) -> None:
 def _(file: Union[wave.WAVE, mp3.MP3], meta: MetadataInfo) -> None:
     file["TIT2"] = id3.TIT2(encoding=3, text=meta.title)
     file["TPE1"] = id3.TPE1(encoding=3, text=meta.artist)
-    file["TDRC"] = id3.TDRC(encoding=3, text=meta.date)
-    file["WOAR"] = id3.WOAR(url=meta.link)
+    file["TDRC"] = id3.TDRC(encoding=3, text=meta.created_date)
+    file["WOAR"] = id3.WOAR(encoding=3, url=meta.link)
     if meta.display_date:
         file["TDRL"] = id3.TDRL(encoding=3, text=meta.display_date)
     if meta.description:
@@ -130,12 +155,29 @@ def _(file: Union[wave.WAVE, mp3.MP3], meta: MetadataInfo) -> None:
         file["TXXX:Artwork"] = TXXX(encoding=3, desc=u'Artwork', text=str(meta.artwork_url))
     if meta.tags:
         file["TXXX:Tags"] = TXXX(encoding=3, desc=u'Tags', text=str(meta.tags))
+    if meta.uid:
+        file["TXXX:UID"] = TXXX(encoding=3, desc=u'UID', text=str(meta.uid))
+    if meta.track_id:
+        file["TXXX:ID"] = TXXX(encoding=3, desc=u'ID', text=str(meta.track_id))
+    if meta.user_id:
+        file["TXXX:ID User"] = TXXX(encoding=3, desc=u'ID User', text=str(meta.user_id))
+    if meta.album_type:
+        file["TXXX:ReleaseType"] = TXXX(encoding=3, desc=u'ReleaseType', text=meta.album_type)
+    if meta.album_display_date is not None:
+        file["TXXX:Album Display Date"] = TXXX(encoding=3, desc=u'Album Display Date', text=meta.album_display_date)
+    if meta.album_publish_date is not None:
+        file["TXXX:Album Publish Date"] = TXXX(encoding=3, desc=u'Album Publish Date', text=meta.album_publish_date)
+    if meta.album_created_date:
+        file["TXXX:Album Creation Date"] = TXXX(encoding=3, desc=u'Album Creation Date', text=meta.album_created_date)
+    if meta.album_release_date:
+        file["TXXX:Album Release Date"] = TXXX(encoding=3, desc=u'Album Release Date', text=meta.album_release_date)        
+    
 
 @assemble_metadata.register(mp4.MP4)
 def _(file: mp4.MP4, meta: MetadataInfo) -> None:
     file["\251ART"] = meta.artist
     file["\251nam"] = meta.title
-    file["\251day"] = meta.date
+    file["\251day"] = meta.created_date
     file["----:com.apple.iTunes:WWWArtist"] = meta.link.encode() if meta.link else None
     if meta.description:
         file["\251cmt"] = meta.description
@@ -155,3 +197,21 @@ def _(file: mp4.MP4, meta: MetadataInfo) -> None:
         file["----:com.apple.iTunes:Artwork"] = meta.artwork_url.encode()
     if meta.display_date:
         file["----:com.apple.iTunes:ReleaseTime"] = meta.display_date.encode() if meta.display_date else None
+    if meta.uid:
+        file["----:com.apple.iTunes:UID"] = meta.uid.encode()
+    if meta.track_id:
+        file["----:com.apple.iTunes:ID"] = str(meta.track_id).encode()
+    if meta.user_id:
+        file["----:com.apple.iTunes:ID User"] = str(meta.user_id).encode()
+    if meta.album_type:
+        file["----:com.apple.iTunes:ReleaseType"] = meta.album_type.encode()
+    if meta.album_display_date:
+        file["----:com.apple.iTunes:Album Display Date"] = meta.album_display_date.encode() if meta.album_display_date else None
+    if meta.album_publish_date:
+        file["----:com.apple.iTunes:Album Publish Date"] = meta.album_publish_date.encode() if meta.album_publish_date else None
+    if meta.album_created_date:
+        file["----:com.apple.iTunes:Album Creation Date"] = meta.album_created_date.encode() if meta.album_created_date else None
+    if meta.album_release_date:
+        file["----:com.apple.iTunes:Album Release Date"] = meta.album_release_date.encode() if meta.album_release_date else None
+    if meta.album_link:
+        file["----:com.apple.iTunes:WWWAlbum"] = meta.album_link.encode() if meta.album_link else None
