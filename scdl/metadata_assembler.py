@@ -108,6 +108,8 @@ def _assemble_vorbis_tags(file: FileType, meta: MetadataInfo) -> None:
         file["Album Creation Date"] = meta.album_created_date
     if meta.album_release_date:
         file["Album Release Date"] = meta.album_release_date
+    if meta.album_link:
+        file["WWWAlbum"] = meta.album_release_date
         
         
 @assemble_metadata.register(flac.FLAC)
@@ -170,7 +172,9 @@ def _(file: Union[wave.WAVE, mp3.MP3], meta: MetadataInfo) -> None:
     if meta.album_created_date:
         file["TXXX:Album Creation Date"] = TXXX(encoding=3, desc=u'Album Creation Date', text=meta.album_created_date)
     if meta.album_release_date:
-        file["TXXX:Album Release Date"] = TXXX(encoding=3, desc=u'Album Release Date', text=meta.album_release_date)        
+        file["TXXX:Album Release Date"] = TXXX(encoding=3, desc=u'Album Release Date', text=meta.album_release_date)    
+    if meta.album_link:
+        file["TXXX::WWWAlbum"] = TXXX(encoding=3, desc=u'WWWAlbum', text=meta.album_link)         
     
 
 @assemble_metadata.register(mp4.MP4)
