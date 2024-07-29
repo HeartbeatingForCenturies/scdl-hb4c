@@ -1342,7 +1342,9 @@ def _add_metadata_to_stream(
             logger.error(f"Could not get cover art at {artwork_base_url}")
 
     def capitalize_set_type(set_type):
-        if set_type == "ep":
+        if set_type in [None, ""]:
+            return "Playlist"
+        elif set_type == "ep":
             return "EP"
         else:
             return set_type.capitalize()
@@ -1373,7 +1375,7 @@ def _add_metadata_to_stream(
     created_date = created_date_obj.strftime('%Y-%m-%dT%H:%M:%S')
     
     if album_available and playlist_info:
-        album_type = capitalize_set_type(playlist_info.get("set_type", ""))
+        album_type = capitalize_set_type(playlist_info.get("set_type", None))
         album_link = playlist_info.get("permalink_url")
         
         album_display_date = playlist_info.get("display_date")
@@ -1411,7 +1413,7 @@ def _add_metadata_to_stream(
         album_track_num=playlist_info["tracknumber_int"] if album_available else None,  # type: ignore[index]
         album_track_count=playlist_info["track_count"] if album_available else None,  # type: ignore[index]
         album_type=album_type if album_available else None,  # Use processed album_type
-        album_display_date=album_display_date_str if album_available else None,
+        album_display_date=album_display_date_str if album_available else None, 
         album_publish_date=album_publish_date_str if album_available else None,
         album_created_date=album_created_date_str if album_available else None,
         album_release_date=album_release_date_str if album_available else None,
