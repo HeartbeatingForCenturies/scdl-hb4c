@@ -109,7 +109,7 @@ def _assemble_vorbis_tags(file: FileType, meta: MetadataInfo) -> None:
     if meta.album_release_date:
         file["Album Release Date"] = meta.album_release_date
     if meta.album_link:
-        file["WWWAlbum"] = meta.album_link
+        file["WWWAlbum"] = str(meta.album_link)
         
         
 @assemble_metadata.register(flac.FLAC)
