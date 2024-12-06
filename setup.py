@@ -15,7 +15,7 @@ setup(
     include_package_data=True,
     author="FlyinGrub",
     author_email="flyinggrub@gmail.com",
-    description="Download Music from Souncloud",
+    description="Download Music from Soundcloud",
     long_description=long_description,
     long_description_content_type="text/markdown",
     install_requires=[
@@ -28,6 +28,8 @@ setup(
         "soundcloud-v2>=1.5.2",
         "filelock>=3.0.0",
         "typing_extensions; python_version < '3.11'",
+        "Pillow",  # Added for image processing
+        "pywin32",  # Added for Windows file handling
     ],
     extras_require={
         "dev": [
