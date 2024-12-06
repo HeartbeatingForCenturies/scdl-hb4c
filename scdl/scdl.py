@@ -90,6 +90,8 @@ import time
 import traceback
 import typing
 import urllib.parse
+import pywintypes
+import win32file
 import warnings
 from dataclasses import asdict
 from functools import lru_cache
@@ -97,6 +99,7 @@ from types import TracebackType
 from typing import IO, Generator, List, NoReturn, Optional, Set, Tuple, Type, Union
 from datetime import datetime
 from tqdm import tqdm
+from win32com import client
 
 if sys.version_info < (3, 8):
     from typing_extensions import TypedDict
@@ -270,6 +273,84 @@ def get_filelock(path: Union[pathlib.Path, str], timeout: int = 10) -> filelock.
     file_lock_dirs.append(path.parent)
     lock_path = str(path) + ".scdl.lock"
     return filelock.FileLock(lock_path, timeout=timeout)
+
+def extract_uid_from_waveform(
+    track: Union[BasicTrack, Track],
+    playlist_info: Optional[PlaylistInfo] = None,
+) -> str:
+    waveform_url = getattr(track, 'waveform_url', None)
+    if not waveform_url:
+        logger.warning("No waveform URL found.")  # Log a warning
+        return None
+        
+    pattern = r"https://wave\.sndcdn\.com/([a-zA-Z0-9_\-\.]+)_m\.json"
+    match = re.search(pattern, waveform_url)
+    if match:
+        uid = match.group(1)
+        logger.debug(f"Extracted UID: {uid}")  # Log the extracted UID
+        return uid
+    else:
+        logger.warning("No UID found in waveform URL.")  # Log a warning
+        return None
+
+
+def adjust_artwork_url_for_size(url: str, size: str = "original") -> Optional[requests.Response]:
+    if "large.jpg" in url:
+        new_artwork_url = url.replace("large.jpg", f"{size}.jpg")
+    elif "large.png" in url:
+        new_artwork_url = url.replace("large.png", f"{size}.png")
+    else:
+        new_artwork_url = url.replace("large", size)
+    try:
+        artwork_response = requests.get(new_artwork_url, allow_redirects=False, timeout=5)
+        logger.debug(f"Response status code: {artwork_response.status_code}")
+        logger.debug(f"Content-Type: {artwork_response.headers.get('Content-Type', '').lower()}")
+        
+        if artwork_response.status_code == 404:
+            if not new_artwork_url.endswith(".png"):
+                fallback_url = new_artwork_url.replace(".jpg", ".png")
+                artwork_response = requests.get(fallback_url, allow_redirects=False, timeout=5)
+
+        if artwork_response.status_code == 200 and artwork_response.headers.get("Content-Type", "").lower() in ("image/png", "image/jpeg", "image/jpg"):
+            return artwork_response
+        return None
+    except requests.RequestException as e:
+        logger.error(f"RequestException: {e}")
+        return None
+
+
+def extract_artwork_filename_from_artwork_url(
+    track: Union[BasicTrack, Track],
+    playlist_info: Optional[PlaylistInfo] = None,
+) -> Optional[str]:
+    artwork_base_url = track.artwork_url or getattr(track.user, 'avatar_url', None)
+    
+    if not artwork_base_url:
+        logger.warning("No artwork URL found.")  # Log a warning
+        return None
+
+    if not isinstance(artwork_base_url, str):
+        logger.warning(f"Unexpected type for artwork_base_url: {type(artwork_base_url)}")  # Log a warning
+        return None
+
+    updated_artwork_response = adjust_artwork_url_for_size(artwork_base_url, size="original")
+    
+    if not updated_artwork_response:
+        logger.warning("No valid artwork found after replacement.")  # Log a warning
+        return None
+
+    updated_artwork_url = updated_artwork_response.url
+
+    pattern = r"(artworks|avatars)-[^.]+-original(\.jpg|\.jpeg|\.png)$"
+
+    match = re.search(pattern, updated_artwork_url)  # Use updated_artwork_url for the final URL
+    if match:
+        filename = match.group(0)  # Get the entire matched string
+        logger.debug(f"Extracted Artwork Filename: {filename}")  # Log the extracted filename
+        return filename
+    else:
+        logger.warning("No filename found in artwork URL.")  # Log a warning
+        return None
 
 
 def main() -> None:
@@ -484,15 +565,24 @@ def sanitize_str(
     """Sanitizes a string for use as a filename. Does not allow the file to be hidden"""
     if filename.startswith("."):
         filename = "_" + filename
+    
+    # Remove unwanted extensions
+    unwanted_extensions = [".mp3", ".mp4", ".wav"]
+    for unwanted_ext in unwanted_extensions:
+        if filename.lower().endswith(unwanted_ext):
+            filename = filename[: -len(unwanted_ext)]
+            break
+    
     if filename.endswith(".") and not ext:
         filename = filename + "_"
+    
     max_filename_length = max_length - len(ext)
     sanitized = sanitize_filename(
         filename,
         replacement_text=replacement_char,
         max_len=max_filename_length,
     )
-    # sanitize_filename truncates incorrectly, use our own method
+    # Use custom truncation method to ensure correct length
     sanitized = truncate_str(sanitized, max_filename_length)
     return sanitized + ext
 
@@ -764,13 +854,6 @@ def download_playlist(
             os.chdir("..")
 
 
-def try_utime(path: str, filetime: float) -> None:
-    try:
-        os.utime(path, (time.time(), filetime))
-    except Exception:
-        logger.error("Cannot update utime of file")
-
-
 def is_downloading_to_stdout(kwargs: SCDLArgs) -> bool:
     return kwargs.get("name_format") == "-"
 
@@ -801,6 +884,8 @@ def get_filename(
 
     username = track.user.username
     title = track.title.encode("utf-8", "ignore").decode("utf-8")
+    uid = extract_uid_from_waveform(track)
+    artwork_id = extract_artwork_filename_from_artwork_url(track)
 
     if kwargs.get("addtofile") and username not in title and "-" not in title:
         title = f"{username} - {title}"
@@ -816,9 +901,16 @@ def get_filename(
                 **asdict(track),
                 playlist=playlist_info,
                 timestamp=timestamp,
+                uid=uid,
+                artwork_id=artwork_id
             )
         else:
-            title = kwargs["name_format"].format(**asdict(track), timestamp=timestamp)
+            title = kwargs["name_format"].format(
+            **asdict(track), 
+            timestamp=timestamp,
+            uid=uid,
+            artwork_id=artwork_id
+            )
 
     if original_filename is not None:
         original_filename = original_filename.encode("utf-8", "ignore").decode("utf-8")
@@ -899,6 +991,7 @@ def download_original_file(
         not encoding_to_flac,  # copy the stream only if we aren't re-encoding to flac
         filename,
         kwargs,
+        playlist_info=playlist_info,
         skip_re_encoding=not encoding_to_flac,
     )
 
@@ -948,7 +1041,6 @@ def get_transcoding_m3u8(
         return r.json()["url"]
     raise SoundCloudException(f"Transcoding does not contain URL: {transcoding}")
 
-
 def download_hls(
     client: SoundCloud,
     track: Union[BasicTrack, Track],
@@ -959,55 +1051,97 @@ def download_hls(
     if not track.media.transcodings:
         raise SoundCloudException(f"Track {track.permalink_url} has no transcodings available")
 
-    logger.debug(f"Transcodings: {track.media.transcodings}")
+    logger.debug("Transcodings found:")
+    for t in track.media.transcodings:
+        logger.debug(f"{t.preset} via. {t.format.protocol}")
 
     transcodings = [t for t in track.media.transcodings if t.format.protocol == "hls"]
+    if not transcodings:
+        raise SoundCloudException(f"No HLS transcodings available for {track.permalink_url}")
+
     to_stdout = is_downloading_to_stdout(kwargs)
 
-    # ordered in terms of preference best -> worst
-    valid_presets = [("mp3", ".mp3")]
+    prioritized_presets = [
+        ("aac_256k", "m4a"),
+        ("aac_1_0", "m4a"),
+        ("aac_hq", "m4a"),
+        ("aac_160k", "m4a"),
+        ("mp3_1_0", "mp3"),
+        ("mp3_0_1", "mp3"),
+        ("mp3_0_0", "mp3"),
+    ]
 
-    if not kwargs.get("onlymp3"):
-        if kwargs.get("opus"):
-            valid_presets = [("opus", ".opus"), *valid_presets]
-        valid_presets = [("aac", ".m4a"), *valid_presets]
+    if kwargs.get("onlymp3"):
+        prioritized_presets = [
+            ("mp3_1_0", "mp3"),
+            ("mp3_0_1", "mp3"),
+            ("mp3_0_0", "mp3"),
+        ]
 
     transcoding = None
     ext = None
-    for preset_name, preset_ext in valid_presets:
+
+    # Find the best matching transcoding based on priority
+    for preset_name, preset_ext in prioritized_presets:
         for t in transcodings:
-            if t.preset.startswith(preset_name):
+            if t.preset == preset_name:
                 transcoding = t
-                ext = preset_ext
+                ext = f".{preset_ext}"
+                break
         if transcoding:
             break
-    else:
+
+    if not transcoding:
+        available_presets = [t.preset for t in track.media.transcodings if t.format.protocol == "hls"]
         raise SoundCloudException(
-            "Could not find valid transcoding. Available transcodings: "
-            f"{[t.preset for t in track.media.transcodings if t.format.protocol == 'hls']}",
+            f"Could not find valid transcoding. Available presets: {available_presets}"
         )
 
-    filename = get_filename(track, kwargs, ext=ext, playlist_info=playlist_info)
-    logger.debug(f"filename : {filename}")
-    # Skip if file ID or filename already exists
+    logger.debug(f"Selected transcoding preset: {transcoding.preset}, extension: {ext}")
+
+    # Generate filename
+    base_filename = get_filename(track, kwargs, ext=ext, playlist_info=playlist_info)
+    filename = (
+        f"{os.path.splitext(base_filename)[0]} [{transcoding.preset}]{ext}"
+        if transcoding.preset in ["aac_256k", "aac_160k"]
+        else base_filename
+    )
+
+    logger.debug(f"Generated filename: {filename}")
+
+    # Skip download if file already exists
     if not to_stdout and already_downloaded(track, title, filename, kwargs):
+        logger.info(f"File already downloaded: {filename}")
         return filename, True
 
-    # Get the requests stream
     url = get_transcoding_m3u8(client, transcoding, kwargs)
-    _, ext = os.path.splitext(filename)
+    logger.debug(f"Stream URL: {url}")
 
-    re_encode_to_out(
-        track,
-        url,
-        preset_name
-        if preset_name != "aac"
-        else "ipod",  # We are encoding aac files to m4a, so an ipod codec is used
-        True,  # no need to fully re-encode the whole hls stream
-        filename,
-        kwargs,
-        playlist_info,
-    )
+    # Determine codec based on transcoding preset
+    if "mp3" in transcoding.preset:
+        codec = "mp3"
+    elif "aac" in transcoding.preset:
+        codec = "ipod"
+    else:
+        raise SoundCloudException(f"Unsupported codec for preset: {transcoding.preset}")
+
+    logger.debug(f"Using codec: {codec}")
+
+    try:
+        logger.info(f"Starting re-encoding for: {filename}")
+        re_encode_to_out(
+            track,
+            url,
+            codec,
+            True,
+            filename,
+            kwargs,
+            playlist_info,
+        )
+        logger.info(f"Re-encoding completed: {filename}")
+    except Exception as e:
+        logger.error(f"FFmpeg error: {e}")
+        raise SoundCloudException(f"FFmpeg error while encoding: {e}")
 
     return filename, False
 
@@ -1017,7 +1151,7 @@ def download_track(
     track: Union[BasicTrack, Track],
     kwargs: SCDLArgs,
     playlist_info: Optional[PlaylistInfo] = None,
-    exit_on_fail: bool = True,
+    exit_on_fail: bool = False,  # Set to False so the function doesn't exit on failure
 ) -> None:
     """Downloads a track"""
     try:
@@ -1092,8 +1226,6 @@ def download_track(
             raise SoundCloudException(f"{filename} already downloaded.")
 
         # If file does not exist an error occurred
-        # If we are downloading to stdout and reached this point, then most likely
-        # we downloaded the track
         if not os.path.isfile(filename) and not to_stdout:
             raise SoundCloudException(f"An error occurred downloading {filename}.")
 
@@ -1102,30 +1234,22 @@ def download_track(
             with open(filename, "rb") as f:
                 file_data = io.BytesIO(f.read())
                 
-
             _add_metadata_to_stream(track, file_data, kwargs, playlist_info)
 
             with open(filename, "wb") as f:
                 file_data.seek(0)
                 f.write(file_data.getbuffer())
 
-        # Try to change the real creation date
-        if not to_stdout:
-           # Get the current time
-            current_time = time.time()
-            # Update the file modification time to the current time
-            os.utime(filename, (current_time, current_time))
-
-        #Try to change the real creation date
-        #if not to_stdout:
-           # filetime = int(time.mktime(track.created_at.timetuple()))
-            #try_utime(filename, filetime)
-
         logger.info(f"{filename} Downloaded.\n")
+    
     except SoundCloudException as err:
-        logger.error(err)
-        if exit_on_fail:
-            sys.exit(1)
+        logger.error(f"Error downloading track {track.title}: {err}")
+        # Instead of exiting, log the error and continue with the next track
+        return  # Simply return to skip the current track and move to the next one.
+    except Exception as err:
+        logger.error(f"Unexpected error with track {track.title}: {err}")
+        # Log the unexpected error and move to the next track
+        return  # Return here too to skip the track in case of other exceptions
 
 
 def can_convert(filename: str) -> bool:
@@ -1197,6 +1321,7 @@ def record_download_archive(track: Union[BasicTrack, Track], kwargs: SCDLArgs) -
         logger.error("Error trying to write to download archive...")
         logger.error(ioe)
 
+
 def build_ffmpeg_encoding_args(
     input_file: str,
     output_file: str,
@@ -1242,7 +1367,7 @@ def build_ffmpeg_encoding_args(
 def _write_streaming_response_to_pipe(
     response: requests.Response,
     pipe: Union[IO[bytes], io.BytesIO],
-    kwargs: SCDLArgs,
+    kwargs: dict,  # Assuming SCDLArgs is a dict
 ) -> None:
     total_length = int(response.headers["content-length"])
 
@@ -1254,24 +1379,36 @@ def _write_streaming_response_to_pipe(
 
     logger.info("Receiving the streaming response")
     received = 0
-    chunk_size = 8192
+    chunk_size = 8192  # Keeping chunk_size as requested
 
-    with memoryview(bytearray(chunk_size)) as buffer:
-        for chunk in tqdm(
-            iter(lambda: response.raw.read(chunk_size), b""),
-            total=(total_length / chunk_size) + 1,
-            disable=bool(kwargs.get("hide_progress")),
-            unit="Kb",
-            unit_scale=chunk_size / 1024,
-        ):
-            if not chunk:
-                break
+    # Set up progress bar
+    reset = '\033[0m' 
+    cyan = '\033[96m'
 
-            buffer_view = buffer[: len(chunk)]
-            buffer_view[:] = chunk
+    with tqdm(
+        total=total_length, 
+        unit="B", 
+        unit_scale=True, 
+        desc="Downloading", 
+        leave=True, 
+        ncols=50, 
+        bar_format=f'{{l_bar}}{cyan}{{bar}}{reset}| {{n_fmt}}/{{total_fmt}}'
+    ) as pbar:
+        with memoryview(bytearray(chunk_size)) as buffer:
+            for chunk in iter(lambda: response.raw.read(chunk_size), b""):
+                if not chunk:
+                    break
 
-            received += len(chunk)
-            pipe.write(buffer_view)
+                # Copy chunk to memoryview buffer
+                buffer_view = buffer[: len(chunk)]
+                buffer_view[:] = chunk
+
+                # Update received size and progress bar
+                received += len(chunk)
+                pbar.update(len(chunk))
+
+                # Write to the pipe
+                pipe.write(buffer_view)
 
     pipe.flush()
 
@@ -1316,7 +1453,7 @@ def _add_metadata_to_stream(
 
     artwork_base_url = track.artwork_url or track.user.avatar_url
     artwork_response = None
-    new_artwork_url = "None"  # Ensure new_artwork_url is initialized
+    new_artwork_url = "None"
 
     if kwargs.get("original_art"):
         # Try different sizes and formats
@@ -1351,10 +1488,6 @@ def _add_metadata_to_stream(
 
     album_type = None
 
-    # Use new_artwork_url and album_type here
-    logger.info(f"Artwork URL: {new_artwork_url}")
-    logger.info(f"Set Type: {album_type}")
-
     artist: str = track.user.username
     if bool(kwargs.get("extract_artist")):
         for dash in (" - ", " − ", " – ", " — ", " ― "):  # noqa: RUF001
@@ -1370,7 +1503,6 @@ def _add_metadata_to_stream(
 
     display_date_obj = track.display_date
     display_date = display_date_obj.strftime('%Y-%m-%dT%H:%M:%S')
-   
     created_date_obj = track.created_at
     created_date = created_date_obj.strftime('%Y-%m-%dT%H:%M:%S')
     
@@ -1383,7 +1515,6 @@ def _add_metadata_to_stream(
         album_created_date = playlist_info.get("created_at")
         album_release_date = playlist_info.get("release_date")
         
-        # Convert to string and remove 'Z'
         album_display_date_str = album_display_date.strftime('%Y-%m-%dT%H:%M:%S') if isinstance(album_display_date, datetime) else album_display_date
         album_publish_date_str = album_publish_date.strftime('%Y-%m-%dT%H:%M:%S') if isinstance(album_publish_date, datetime) else album_publish_date
         album_created_date_str = album_created_date.strftime('%Y-%m-%dT%H:%M:%S') if isinstance(album_created_date, datetime) else album_created_date
@@ -1404,7 +1535,7 @@ def _add_metadata_to_stream(
         genre=track.genre,
         tags=track.tag_list,
         artwork_url=new_artwork_url,
-        artwork_jpeg=artwork_response.content if artwork_response else None,
+        artwork_file=artwork_response.content if artwork_response else None,
         link=track.permalink_url,
         created_date=created_date,
         display_date=display_date,
@@ -1412,7 +1543,7 @@ def _add_metadata_to_stream(
         album_author=playlist_info["author"] if album_available else None,  # type: ignore[index]
         album_track_num=playlist_info["tracknumber_int"] if album_available else None,  # type: ignore[index]
         album_track_count=playlist_info["track_count"] if album_available else None,  # type: ignore[index]
-        album_type=album_type if album_available else None,  # Use processed album_type
+        album_type=album_type if album_available else None,
         album_display_date=album_display_date_str if album_available else None, 
         album_publish_date=album_publish_date_str if album_available else None,
         album_created_date=album_created_date_str if album_available else None,
@@ -1425,9 +1556,7 @@ def _add_metadata_to_stream(
 
     mutagen_file = mutagen.File(stream)
 
-
     try:
-        # Delete all the existing tags and write our own tags
         if mutagen_file is not None:
             stream.seek(0)
             mutagen_file.delete(stream)
@@ -1460,24 +1589,27 @@ def re_encode_to_out(
     should_copy: bool,
     filename: str,
     kwargs: SCDLArgs,
-    playlist_info: Optional[PlaylistInfo] = None,
+    playlist_info: Optional[PlaylistInfo],
     skip_re_encoding: bool = False,
 ) -> None:
     to_stdout = is_downloading_to_stdout(kwargs)
 
-    encoded = re_encode_to_buffer(
-        track,
-        in_data,
-        out_codec,
-        should_copy,
-        kwargs,
-        playlist_info,
-        skip_re_encoding,
-    )
+    try:
+        encoded = re_encode_to_buffer(
+            track,
+            in_data,
+            out_codec,
+            should_copy,
+            kwargs,
+            playlist_info,
+            skip_re_encoding,
+        )
 
-    # see https://github.com/python/mypy/issues/5512
-    with get_stdout() if to_stdout else open(filename, "wb") as out_handle:  # type: ignore[attr-defined]
-        shutil.copyfileobj(encoded, out_handle)
+        with get_stdout() if to_stdout else open(filename, "wb") as out_handle:  # type: ignore[attr-defined]
+            shutil.copyfileobj(encoded, out_handle)
+
+    except Exception as e:
+        raise SoundCloudException(f"Error during re-encoding: {e}")
 
 
 def _is_ffmpeg_progress_line(parameters: List[str]) -> bool:
@@ -1495,7 +1627,7 @@ def _is_ffmpeg_progress_line(parameters: List[str]) -> bool:
 
 
 def _get_ffmpeg_pipe(
-    in_data: Union[requests.Response, str],  # streaming response or url
+    in_data: Union[requests.Response, str],  # streaming response or URL
     out_codec: str,
     should_copy: bool,
     output_file: str,
@@ -1503,22 +1635,20 @@ def _get_ffmpeg_pipe(
 ) -> subprocess.Popen:
     logger.info("Creating the ffmpeg pipe...")
 
+    # Build FFmpeg command
     commands = build_ffmpeg_encoding_args(
-        in_data if isinstance(in_data, str) else "-",
+        in_data if isinstance(in_data, str) else "-",  # Use "-" for streaming input
         output_file,
         out_codec,
         kwargs,
         *(
-            (
-                "-c",
-                "copy",
-            )
+            ("-c", "copy")  # Direct copy without re-encoding
             if should_copy
-            else ()
+            else ("-c:a", out_codec)  # Re-encode with specified codec
         ),
     )
 
-    logger.debug(f"ffmpeg command: {' '.join(commands)}")
+    logger.debug(f"FFmpeg command: {' '.join(commands)}")
     return subprocess.Popen(
         commands,
         stdin=subprocess.PIPE,
