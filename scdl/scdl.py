@@ -1069,6 +1069,7 @@ def download_hls(
         ("mp3_1_0", "mp3"),
         ("mp3_0_1", "mp3"),
         ("mp3_0_0", "mp3"),
+        ("mp3_standard", "mp3"),
     ]
 
     if kwargs.get("onlymp3"):
@@ -1076,6 +1077,7 @@ def download_hls(
             ("mp3_1_0", "mp3"),
             ("mp3_0_1", "mp3"),
             ("mp3_0_0", "mp3"),
+            ("mp3_standard", "mp3"),
         ]
 
     transcoding = None
